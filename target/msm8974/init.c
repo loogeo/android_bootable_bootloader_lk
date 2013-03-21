@@ -42,10 +42,14 @@
 #include <crypto5_wrapper.h>
 #include <hsusb.h>
 #include <clock.h>
+#include <partition_parser.h>
+#include <scm.h>
+#include <platform/clock.h>
 
 extern  bool target_use_signed_kernel(void);
 
 static unsigned int target_id;
+static uint32_t pmic_ver;
 
 #define PMIC_ARB_CHANNEL_NUM    0
 #define PMIC_ARB_OWNER_ID       0
@@ -58,6 +62,11 @@ static unsigned int target_id;
 #define CE_READ_PIPE            3
 #define CE_WRITE_PIPE           2
 #define CE_ARRAY_SIZE           20
+
+#ifdef SSD_ENABLE
+#define SSD_CE_INSTANCE_1       1
+#define SSD_PARTITION_SIZE      8192
+#endif
 
 static uint32_t mmc_sdc_base[] =
 	{ MSM_SDC1_BASE, MSM_SDC2_BASE, MSM_SDC3_BASE, MSM_SDC4_BASE };
@@ -100,7 +109,7 @@ static int target_volume_up()
 uint32_t target_volume_down()
 {
 	/* Volume down button is tied in with RESIN on MSM8974. */
-	if (pm8x41_get_pmic_rev() == PMIC_VERSION_V2)
+	if (pmic_ver == PMIC_VERSION_V2)
 		return pm8x41_resin_bark_workaround_status();
 	else
 		return pm8x41_resin_status();
@@ -154,6 +163,9 @@ void target_init(void)
 
 	spmi_init(PMIC_ARB_CHANNEL_NUM, PMIC_ARB_OWNER_ID);
 
+	/* Save PM8941 version info. */
+	pmic_ver = pm8x41_get_pmic_rev();
+
 	target_keystatus();
 
 	if (target_use_signed_kernel())
@@ -187,10 +199,43 @@ unsigned board_machtype(void)
 }
 
 /* Do any target specific intialization needed before entering fastboot mode */
+#ifdef SSD_ENABLE
+static uint32_t  buffer[SSD_PARTITION_SIZE] __attribute__ ((aligned(32)));
+static void ssd_load_keystore_from_emmc()
+{
+	uint64_t           ptn    = 0;
+	int                index  = -1;
+	uint32_t           size   = SSD_PARTITION_SIZE;
+	int                ret    = -1;
+
+	index = partition_get_index("ssd");
+
+	ptn   = partition_get_offset(index);
+	if(ptn == 0){
+		dprintf(CRITICAL,"ERROR: ssd parition not found");
+		return;
+	}
+
+	if(mmc_read(ptn, buffer, size)){
+		dprintf(CRITICAL,"ERROR:Cannot read data\n");
+		return;
+	}
+
+	ret = scm_protect_keystore((uint32_t *)&buffer[0],size);
+	if(ret != 0)
+		dprintf(CRITICAL,"ERROR: scm_protect_keystore Failed");
+}
+#endif
+
 void target_fastboot_init(void)
 {
 	/* Set the BOOT_DONE flag in PM8921 */
 	pm8x41_set_boot_done();
+
+#ifdef SSD_ENABLE
+	clock_ce_enable(SSD_CE_INSTANCE_1);
+	ssd_load_keystore_from_emmc();
+#endif
 }
 
 /* Detect the target type */
@@ -276,7 +321,10 @@ void reboot_device(unsigned reboot_reason)
 		writel(reboot_reason, RESTART_REASON_ADDR);
 
 	/* Configure PMIC for warm reset */
-	pm8x41_reset_configure(PON_PSHOLD_WARM_RESET);
+	if (pmic_ver == PMIC_VERSION_V2)
+		pm8x41_v2_reset_configure(PON_PSHOLD_WARM_RESET);
+	else
+		pm8x41_reset_configure(PON_PSHOLD_WARM_RESET);
 
 	/* Disable Watchdog Debug.
 	 * Required becuase of a H/W bug which causes the system to
@@ -355,4 +403,30 @@ unsigned target_pause_for_battery_charge(void)
 		return 1;*/
 
 	return 0;
+}
+
+void target_usb_stop(void)
+{
+#ifdef SSD_ENABLE
+	clock_ce_disable(SSD_CE_INSTANCE_1);
+#endif
+}
+
+void shutdown_device()
+{
+	dprintf(CRITICAL, "Going down for shutdown.\n");
+
+	/* Configure PMIC for shutdown. */
+	if (pmic_ver == PMIC_VERSION_V2)
+		pm8x41_v2_reset_configure(PON_PSHOLD_SHUTDOWN);
+	else
+		pm8x41_reset_configure(PON_PSHOLD_SHUTDOWN);
+
+	/* Drop PS_HOLD for MSM */
+	writel(0x00, MPM2_MPM_PS_HOLD);
+
+	mdelay(5000);
+
+	dprintf(CRITICAL, "Shutdown failed\n");
+
 }

@@ -49,6 +49,7 @@
 #include <platform.h>
 #include <crypto_hash.h>
 #include <malloc.h>
+#include <boot_stats.h>
 
 #if DEVICE_TREE
 #include <libfdt.h>
@@ -105,6 +106,7 @@ static const char *baseband_mdm     = " androidboot.baseband=mdm";
 static const char *baseband_sglte   = " androidboot.baseband=sglte";
 static const char *baseband_dsda    = " androidboot.baseband=dsda";
 static const char *baseband_dsda2   = " androidboot.baseband=dsda2";
+static const char *baseband_sglte2  = " androidboot.baseband=sglte2";
 
 unsigned boot_into_Android2 = 0;
 unsigned boot_into_recovery2 = 0;
@@ -212,6 +214,10 @@ unsigned char *update_cmdline(const char * cmdline)
 			cmdline_len += strlen(baseband_sglte);
 			break;
 
+		case BASEBAND_SGLTE2:
+			cmdline_len += strlen(baseband_sglte2);
+			break;
+
 		case BASEBAND_DSDA:
 			cmdline_len += strlen(baseband_dsda);
 			break;
@@ -307,6 +313,12 @@ unsigned char *update_cmdline(const char * cmdline)
 
 			case BASEBAND_SGLTE:
 				src = baseband_sglte;
+				if (have_cmdline) --dst;
+				while ((*dst++ = *src++));
+				break;
+
+			case BASEBAND_SGLTE2:
+				src = baseband_sglte2;
 				if (have_cmdline) --dst;
 				while ((*dst++ = *src++));
 				break;
@@ -446,8 +458,8 @@ void boot_linux(void *kernel, unsigned *tags,
 	generate_atags(tags, final_cmdline, ramdisk, ramdisk_size);
 #endif
 
-	dprintf(INFO, "booting linux @ %p, ramdisk @ %p (%d)\n",
-		entry, ramdisk, ramdisk_size);
+	dprintf(INFO, "booting linux @ %p, ramdisk @ %p (%d), tags/device tree @ %p\n",
+		entry, ramdisk, ramdisk_size, tags_phys);
 
 	enter_critical_section();
 
@@ -459,7 +471,7 @@ void boot_linux(void *kernel, unsigned *tags,
 #if ARM_WITH_MMU
 	arch_disable_mmu();
 #endif
-
+	bs_set_timestamp(BS_KERNEL_ENTRY);
 	entry(0, machtype, (unsigned*)tags_phys);
 }
 
@@ -665,6 +677,7 @@ int boot_linux_from_mmc(void)
 		device.is_tampered = 1;
 
 		dprintf(INFO, "Loading boot image (%d): start\n", imagesize_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_START);
 
 		/* Read image without signature */
 		if (mmc_read(ptn + offset, (void *)image_addr, imagesize_actual))
@@ -674,6 +687,7 @@ int boot_linux_from_mmc(void)
 		}
 
 		dprintf(INFO, "Loading boot image (%d): done\n", imagesize_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_DONE);
 
 		offset = imagesize_actual;
 		/* Read signature */
@@ -762,6 +776,7 @@ int boot_linux_from_mmc(void)
 
 		dprintf(INFO, "Loading boot image (%d): start\n",
 				kernel_actual + ramdisk_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_START);
 
 		offset = page_size;
 
@@ -784,6 +799,7 @@ int boot_linux_from_mmc(void)
 
 		dprintf(INFO, "Loading boot image (%d): done\n",
 				kernel_actual + ramdisk_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_DONE);
 
 		if(hdr->second_size != 0) {
 			offset += second_actual;
@@ -952,6 +968,7 @@ int boot_linux_from_flash(void)
 		device.is_tampered = 1;
 
 		dprintf(INFO, "Loading boot image (%d): start\n", imagesize_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_START);
 
 		/* Read image without signature */
 		if (flash_read(ptn, offset, (void *)image_addr, imagesize_actual))
@@ -961,6 +978,7 @@ int boot_linux_from_flash(void)
 		}
 
 		dprintf(INFO, "Loading boot image (%d): done\n", imagesize_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_DONE);
 
 		offset = imagesize_actual;
 		/* Read signature */
@@ -1013,6 +1031,7 @@ int boot_linux_from_flash(void)
 
 		dprintf(INFO, "Loading boot image (%d): start\n",
 				kernel_actual + ramdisk_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_START);
 
 		if (flash_read(ptn, offset, (void *)hdr->kernel_addr, kernel_actual)) {
 			dprintf(CRITICAL, "ERROR: Cannot read kernel image\n");
@@ -1028,6 +1047,7 @@ int boot_linux_from_flash(void)
 
 		dprintf(INFO, "Loading boot image (%d): done\n",
 				kernel_actual + ramdisk_actual);
+		bs_set_timestamp(BS_KERNEL_LOAD_DONE);
 
 		if(hdr->second_size != 0) {
 			offset += second_actual;
@@ -1616,30 +1636,69 @@ void cmd_flash_mmc(const char *arg, void *data, unsigned sz)
 	sparse_header_t *sparse_header;
 	/* 8 Byte Magic + 2048 Byte xml + Encrypted Data */
 	unsigned int *magic_number = (unsigned int *) data;
-	int ret=0;
 
-	if (magic_number[0] == DECRYPT_MAGIC_0 &&
-		magic_number[1] == DECRYPT_MAGIC_1)
-	{
 #ifdef SSD_ENABLE
-		ret = decrypt_scm((uint32 **) &data, &sz);
-#endif
-		if (ret != 0) {
-			dprintf(CRITICAL, "ERROR: Invalid secure image\n");
-			return;
+	int              ret=0;
+	uint32           major_version=0;
+	uint32           minor_version=0;
+
+	ret = scm_svc_version(&major_version,&minor_version);
+	if(!ret)
+	{
+		if(major_version >= 2)
+		{
+			if( !strcmp(arg,"ssd") || !strcmp(arg,"tqs") )
+			{
+				ret = encrypt_scm((uint32 **) &data, &sz);
+				if (ret != 0) {
+					dprintf(CRITICAL, "ERROR: Encryption Failure\n");
+					return;
+				}
+
+				ret = scm_protect_keystore((uint32 *) data, sz);
+				if (ret != 0) {
+					dprintf(CRITICAL, "ERROR: scm_protect_keystore Failed\n");
+					return;
+				}
+			}
+			else
+			{
+				ret = decrypt_scm_v2((uint32 **) &data, &sz);
+				if(ret != 0)
+				{
+					dprintf(CRITICAL,"ERROR: Decryption Failure\n");
+					return;
+				}
+			}
+		}
+		else
+		{
+			if (magic_number[0] == DECRYPT_MAGIC_0 &&
+			magic_number[1] == DECRYPT_MAGIC_1)
+			{
+				ret = decrypt_scm((uint32 **) &data, &sz);
+				if (ret != 0) {
+					dprintf(CRITICAL, "ERROR: Invalid secure image\n");
+					return;
+				}
+			}
+			else if (magic_number[0] == ENCRYPT_MAGIC_0 &&
+				magic_number[1] == ENCRYPT_MAGIC_1)
+			{
+				ret = encrypt_scm((uint32 **) &data, &sz);
+				if (ret != 0) {
+					dprintf(CRITICAL, "ERROR: Encryption Failure\n");
+					return;
+				}
+			}
 		}
 	}
-	else if (magic_number[0] == ENCRYPT_MAGIC_0 &&
-			 magic_number[1] == ENCRYPT_MAGIC_1)
+	else
 	{
-#ifdef SSD_ENABLE
-		ret = encrypt_scm((uint32 **) &data, &sz);
-#endif
-		if (ret != 0) {
-			dprintf(CRITICAL, "ERROR: Encryption Failure\n");
-			return;
-		}
+		dprintf(CRITICAL,"INVALID SVC Version\n");
+		return;
 	}
+#endif /* SSD_ENABLE */
 
 	sparse_header = (sparse_header_t *) data;
 	if (sparse_header->magic != SPARSE_HEADER_MAGIC)
