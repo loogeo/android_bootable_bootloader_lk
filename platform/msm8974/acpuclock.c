@@ -122,6 +122,9 @@ void clock_config_mmc(uint32_t interface, uint32_t freq)
 
 	snprintf(clk_name, 64, "sdc%u_core_clk", interface);
 
+	/* Disalbe MCI_CLK before changing the sdcc clock */
+	mmc_boot_mci_clk_disable();
+
 	if(freq == MMC_CLK_400KHZ)
 	{
 		ret = clk_get_set_enable(clk_name, 400000, 1);
@@ -143,17 +146,8 @@ void clock_config_mmc(uint32_t interface, uint32_t freq)
 		ASSERT(0);
 	}
 
-	reg = 0;
-	reg |= MMC_BOOT_MCI_CLK_ENABLE;
-	reg |= MMC_BOOT_MCI_CLK_ENA_FLOW;
-	reg |= MMC_BOOT_MCI_CLK_IN_FEEDBACK;
-	writel(reg, MMC_BOOT_MCI_CLK);
-
-	/* Wait for the MMC_BOOT_MCI_CLK write to go through. */
-	mmc_mclk_reg_wr_delay();
-
-	/* Wait 1 ms to provide the free running SD CLK to the card. */
-	mdelay(1);
+	/* Enalbe MCI clock */
+	mmc_boot_mci_clk_enable();
 }
 
 /* Configure UART clock based on the UART block id*/
@@ -207,7 +201,7 @@ static void ce_async_reset(uint8_t instance)
 	}
 }
 
-static void clock_ce_enable(uint8_t instance)
+void clock_ce_enable(uint8_t instance)
 {
 	int ret;
 	char clk_name[64];
@@ -253,7 +247,7 @@ static void clock_ce_enable(uint8_t instance)
 	udelay(1);
 }
 
-static void clock_ce_disable(uint8_t instance)
+void clock_ce_disable(uint8_t instance)
 {
 	struct clk *ahb_clk;
 	struct clk *cclk;
@@ -295,6 +289,7 @@ void clock_config_ce(uint8_t instance)
 	ce_async_reset(instance);
 
 	clock_ce_enable(instance);
+
 }
 
 void clock_config_blsp_i2c(uint8_t blsp_id, uint8_t qup_id)

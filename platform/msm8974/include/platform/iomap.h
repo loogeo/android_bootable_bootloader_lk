@@ -39,8 +39,10 @@
 
 #define RPM_MSG_RAM_BASE            0xFC42B000
 #define SYSTEM_IMEM_BASE            0xFE800000
-#define RESTART_REASON_ADDR         (RPM_MSG_RAM_BASE + 0x65C)
-#define RESTART_REASON_ADDR_V2      (SYSTEM_IMEM_BASE + 0x565C)
+#define MSM_SHARED_IMEM_BASE        0xFE850000
+
+#define RESTART_REASON_ADDR         (RPM_MSG_RAM_BASE     + 0x65C)
+#define RESTART_REASON_ADDR_V2      (MSM_SHARED_IMEM_BASE + 0x65C)
 
 #define KPSS_BASE                   0xF9000000
 
@@ -99,6 +101,14 @@
 #define MPM2_MPM_CTRL_BASE                   0xFC4A1000
 #define MPM2_MPM_PS_HOLD                     0xFC4AB000
 #define MPM2_MPM_SLEEP_TIMETICK_COUNT_VAL    0xFC4A3000
+
+/* CE 1 */
+#define  GCC_CE1_BCR                (CLK_CTL_BASE + 0x1040)
+#define  GCC_CE1_CMD_RCGR           (CLK_CTL_BASE + 0x1050)
+#define  GCC_CE1_CFG_RCGR           (CLK_CTL_BASE + 0x1054)
+#define  GCC_CE1_CBCR               (CLK_CTL_BASE + 0x1044)
+#define  GCC_CE1_AXI_CBCR           (CLK_CTL_BASE + 0x1048)
+#define  GCC_CE1_AHB_CBCR           (CLK_CTL_BASE + 0x104C)
 
 /* CE 2 */
 #define  GCC_CE2_BCR                (CLK_CTL_BASE + 0x1080)
